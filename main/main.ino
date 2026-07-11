@@ -1,8 +1,8 @@
 #define ENABLE_GxEPD2_GFX 0
 
 #include <WiFi.h>
-#include <NTP3.h>
 #include <GxEPD2_BW.h>
+#include <Fonts/FreeSans12pt7b.h>
 #include <Fonts/FreeSans18pt7b.h>
 #include <time.h>
 
@@ -10,29 +10,41 @@
 #define RS_PIN   (5)
 #define BUSY_PIN (6)
 
-#define MS_PER_SEC (1000)
+#define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
-#define MINUTES_PER_HOUR SECONDS_PER_MIN
-#define HOURS_PER_DAY (24)
 
-#define TZ_OFFSET_HOURS (-7)
-#define TZ_OFFSET_MINUTES (TZ_OFFSET_HOURS * MINUTES_PER_HOUR)
+#define MAX_CONNECTION_ATTEMPTS (20)
 
 const char *ssid = "<wifi ssid>";
 const char *password = "<wifi password>";
 
 const char *ntpServer = "time.nist.gov";
+const char *timeZone = "MST7MDT,M3.2.0,M11.1.0";
 
-WiFiUDP ntpUDP;
-NTP3 ntp(ntpUDP);
-
-time_t current_time;
+bool wifiConnected = false;
 
 GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
 
-void setup() {
-  Serial.begin(115200);
+void setTimezone(){
+  setenv("TZ",timeZone, 1);
+  tzset();
+}
 
+void initTime() {
+  struct tm timeinfo;
+
+  configTime(0, 0, ntpServer);
+
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return;
+
+  }
+
+  setTimezone();
+}
+
+void initDisplay() {
   Serial.println("Initializing display...");
   display.init(115200, true, 50, false);
   Serial.println("Display initialized. Configuring...");
@@ -40,55 +52,90 @@ void setup() {
   display.setRotation(3);
   display.clearScreen();
   display.fillScreen(GxEPD_WHITE);
-  display.setFont(&FreeSans18pt7b);
   display.setTextColor(GxEPD_BLACK);
-  display.setTextSize(3);
+}
 
-  Serial.println("Configured.");
+void initWifi() {
+  display.setFont(&FreeSans18pt7b);
+  display.setCursor(10, 30);
+  display.setTextSize(1);
+  display.print("Connecting...");
+  display.display(true);
 
-  Serial.println("Connecting to WiFi...");
   WiFi.begin(ssid, password);
 
   wl_status_t wifiStatus;
 
-  while (wifiStatus != WL_CONNECTED) {
+  int attempt = 0;
+  while (wifiStatus != WL_CONNECTED && attempt < MAX_CONNECTION_ATTEMPTS) {
     wifiStatus = WiFi.status();
-    Serial.print(wifiStatus);
+    attempt++;
     delay(1000);
   }
 
-  Serial.println("Connected.");
+  display.fillScreen(GxEPD_WHITE);
+  display.setCursor(10,30);
+  display.setTextSize(1);
 
-  // transition to DST on the second sunday in march at 2am
-  ntp.ruleDST("MDT", Second, Sun, Mar, 2, TZ_OFFSET_MINUTES + MINUTES_PER_HOUR);
-  // transation off DST on first sunday in november at 2am
-  ntp.ruleSTD("MST", First, Sun, Nov, 2, TZ_OFFSET_MINUTES);
+  if (wifiStatus == WL_CONNECTED) {
+    wifiConnected = true;
+    display.print("Connected.");
+  } else {
+    display.print("Failed to connect.");
+  }
 
-  ntp.begin(ntpServer);
+  display.display(true);
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  initDisplay();
+  initWifi();
+
+  if (!wifiConnected) return;
+
+  initTime();
 }
 
 void loop() {
-  ntp.update();
+  if (!wifiConnected) return;
 
-  displayCurrentTime();
+  struct tm timeinfo;
 
-  int seconds_to_sleep = SECONDS_PER_MIN - ntp.seconds();
-  delay(seconds_to_sleep * MS_PER_SEC);
+  if (!getLocalTime(&timeinfo)) {
+    Serial.println("Failed to obtain time");
+    return;
+  }
+
+  displayTime(&timeinfo);
+
+  int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
+  esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
+  esp_light_sleep_start();
 }
 
-void displayCurrentTime() {
+void displayTime(struct tm *timeinfo) {
+
+  char timeString[8];
+  char dateString[16];
+
+  strftime(timeString, sizeof(timeString), "%I:%M", timeinfo);
+  strftime(dateString, sizeof(dateString), "%D", timeinfo);
+
+  Serial.println(timeString);
+
   display.fillScreen(GxEPD_WHITE);
-  display.setCursor(15, 95);
 
-  int hours = ntp.hours();
-  int minutes = ntp.minutes();
+  display.setCursor(20, 85);
+  display.setTextSize(3);
+  display.setFont(&FreeSans18pt7b);
+  display.print(timeString);
 
-  if (hours > 12) hours -= 12;
+  display.setCursor(175, 115);
+  display.setTextSize(1);
+  display.setFont(&FreeSans12pt7b);
+  display.print(dateString);
 
-  char buf[6];
-
-  sprintf(buf, "%02d:%02d\0", hours, minutes);
-
-  display.print(buf);
   display.display(true);
 }
