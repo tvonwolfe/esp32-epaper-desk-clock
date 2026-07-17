@@ -12,6 +12,8 @@
 
 #define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
+#define MIN_PER_HOUR SECONDS_PER_MIN
+#define TIME_SYNC_INTERVAL (12 * MIN_PER_HOUR)
 
 #define MAX_CONNECTION_ATTEMPTS (20)
 
@@ -22,6 +24,8 @@ const char *ntpServer = "time.nist.gov";
 const char *timeZone = "MST7MDT,M3.2.0,M11.1.0";
 
 bool wifiConnected = false;
+
+unsigned int timeSyncIntervalCounter = 0;
 
 GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
 
@@ -38,7 +42,6 @@ void initTime() {
   if (!getLocalTime(&timeinfo)) {
     Serial.println("Failed to obtain time");
     return;
-
   }
 
   setTimezone();
@@ -87,6 +90,47 @@ void initWifi() {
   display.display(true);
 }
 
+bool reconnectWifiIfDisconnected() {
+  wl_status_t wifiStatus;
+
+  wifiStatus = WiFi.status();
+
+  if (wifiStatus == WL_CONNECTED) return true;
+
+  WiFi.reconnect();
+
+  int attempt = 0;
+  while (wifiStatus != WL_CONNECTED && attempt < MAX_CONNECTION_ATTEMPTS) {
+    wifiStatus = WiFi.status();
+    attempt++;
+    delay(1000);
+  }
+
+  return wifiStatus == WL_CONNECTED;
+}
+
+bool retrieveTime(struct tm *timeinfo) {
+  timeSyncIntervalCounter++;
+
+  if (timeSyncIntervalCounter >= TIME_SYNC_INTERVAL) {
+    bool result = reconnectWifiIfDisconnected();
+
+    // we failed to connect to the network; do nothing
+    if (!result) return false;
+
+    // we successfully connected; reset the interval
+    timeSyncIntervalCounter = 0;
+    initTime();
+  }
+
+  bool timeRetrievalSuccess = getLocalTime(timeinfo);
+  if (!timeRetrievalSuccess) {
+    Serial.println("Failed to obtain time");
+  }
+
+  return timeRetrievalSuccess;
+}
+
 void setup() {
   Serial.begin(115200);
 
@@ -103,11 +147,7 @@ void loop() {
 
   struct tm timeinfo;
 
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("Failed to obtain time");
-    return;
-  }
-
+  retrieveTime(&timeinfo);
   displayTime(&timeinfo);
 
   int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
