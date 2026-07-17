@@ -184,10 +184,14 @@ void displayTime(struct tm *timeinfo) {
     display.setFont(&FreeSans18pt7b);
     display.print(timeString);
 
-    display.setCursor(175, 115);
     display.setTextSize(1);
     display.setFont(&FreeSans12pt7b);
+
+    display.setCursor(25, 115);
     display.print(dateString);
+
+    display.setCursor(235, 115);
+    display.print(amPmString);
 
     display.display(true);
 }
