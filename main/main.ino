@@ -13,7 +13,7 @@
 #define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
 #define MIN_PER_HOUR SECONDS_PER_MIN
-#define TIME_SYNC_INTERVAL (12 * MIN_PER_HOUR)
+#define TIME_SYNC_INTERVAL MIN_PER_HOUR
 
 #define MAX_CONNECTION_ATTEMPTS (20)
 
@@ -22,8 +22,6 @@ const char *password = "<wifi password>";
 
 const char *ntpServer = "time.nist.gov";
 const char *timeZone = "MST7MDT,M3.2.0,M11.1.0";
-
-bool wifiConnected = false;
 
 unsigned int timeSyncIntervalCounter = 0;
 
@@ -36,14 +34,7 @@ void setTimezone(){
 
 void initTime() {
     struct tm timeinfo;
-
     configTime(0, 0, ntpServer);
-
-    if (!getLocalTime(&timeinfo)) {
-        Serial.println("Failed to obtain time");
-        return;
-    }
-
     setTimezone();
 }
 
@@ -58,7 +49,7 @@ void initDisplay() {
     display.setTextColor(GxEPD_BLACK);
 }
 
-void initWifi() {
+bool initWifi() {
     display.setFont(&FreeSans18pt7b);
     display.setCursor(10, 30);
     display.setTextSize(1);
@@ -83,7 +74,6 @@ void initWifi() {
     display.setTextSize(1);
 
     if (wifiStatus == WL_CONNECTED) {
-        wifiConnected = true;
         display.print("Connected.");
         Serial.println("\nSuccessfully connected to network");
     } else {
@@ -92,6 +82,8 @@ void initWifi() {
     }
 
     display.display(true);
+
+    return wifiStatus == WL_CONNECTED;
 }
 
 bool reconnectWifiIfDisconnected() {
@@ -112,7 +104,9 @@ bool reconnectWifiIfDisconnected() {
         delay(1000);
     }
 
-    if (wifiStatus != WL_CONNECTED) {
+    if (wifiStatus == WL_CONNECTED) {
+        Serial.println("\nSuccessfully re-connected to network");
+    } else {
         Serial.println("Failed to reconnect.");
         WiFi.disconnect(); // fully disconnect
     }
@@ -146,19 +140,18 @@ void setup() {
     Serial.begin(115200);
 
     initDisplay();
-    initWifi();
-
-    if (!wifiConnected) return;
+    bool wifiSuccess = initWifi();
+    if (!wifiSuccess) return;
 
     initTime();
 }
 
 void loop() {
-    if (!wifiConnected) return;
-
     struct tm timeinfo;
 
-    retrieveTime(&timeinfo);
+    bool success = retrieveTime(&timeinfo);
+    if (!success) return;
+
     displayTime(&timeinfo);
 
     int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
