@@ -114,49 +114,23 @@ bool reconnectWifiIfDisconnected() {
     return wifiStatus == WL_CONNECTED;
 }
 
-bool retrieveTime(struct tm *timeinfo) {
+void retrieveTime(struct tm *timeinfo) {
     timeSyncIntervalCounter++;
 
     if (timeSyncIntervalCounter >= TIME_SYNC_INTERVAL) {
         bool result = reconnectWifiIfDisconnected();
 
-        // we failed to connect to the network; do nothing
-        if (!result) return false;
-
-        // we successfully connected; reset the interval
-        timeSyncIntervalCounter = 0;
-        initTime();
+        if (result) {
+          // we successfully connected; reset the interval
+          timeSyncIntervalCounter = 0;
+          initTime();
+        }
     }
 
     bool timeRetrievalSuccess = getLocalTime(timeinfo);
     if (!timeRetrievalSuccess) {
         Serial.println("Failed to obtain time");
     }
-
-    return timeRetrievalSuccess;
-}
-
-void setup() {
-    Serial.begin(115200);
-
-    initDisplay();
-    bool wifiSuccess = initWifi();
-    if (!wifiSuccess) return;
-
-    initTime();
-}
-
-void loop() {
-    struct tm timeinfo;
-
-    bool success = retrieveTime(&timeinfo);
-    if (!success) return;
-
-    displayTime(&timeinfo);
-
-    int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
-    esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
-    esp_light_sleep_start();
 }
 
 void displayTime(struct tm *timeinfo) {
@@ -187,4 +161,25 @@ void displayTime(struct tm *timeinfo) {
     display.print(amPmString);
 
     display.display(true);
+}
+
+void setup() {
+    Serial.begin(115200);
+
+    initDisplay();
+    bool wifiSuccess = initWifi();
+    if (!wifiSuccess) return;
+
+    initTime();
+}
+
+void loop() {
+    struct tm timeinfo;
+
+    retrieveTime(&timeinfo);
+    displayTime(&timeinfo);
+
+    int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
+    esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
+    esp_light_sleep_start();
 }
