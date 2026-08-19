@@ -6,6 +6,10 @@
 #include <Fonts/FreeSans18pt7b.h>
 #include <time.h>
 
+extern "C" {
+  #include "esp_sntp.h"
+}
+
 #define DC_PIN   (4)
 #define RS_PIN   (5)
 #define BUSY_PIN (6)
@@ -13,7 +17,7 @@
 #define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
 #define MIN_PER_HOUR SECONDS_PER_MIN
-#define TIME_SYNC_INTERVAL MIN_PER_HOUR
+#define TIME_SYNC_INTERVAL (SECONDS_PER_MIN * 15 * 1000) // 15 minutes
 
 #define MAX_CONNECTION_ATTEMPTS (20)
 
@@ -23,8 +27,6 @@ const char *password = "<wifi password>";
 const char *ntpServer = "time.nist.gov";
 const char *timeZone = "MST7MDT,M3.2.0,M11.1.0";
 
-unsigned int timeSyncIntervalCounter = 0;
-
 GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
 
 void setTimezone(){
@@ -33,9 +35,10 @@ void setTimezone(){
 }
 
 void initTime() {
-    struct tm timeinfo;
     configTime(0, 0, ntpServer);
     setTimezone();
+    sntp_set_sync_interval(TIME_SYNC_INTERVAL);
+    sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
 }
 
 void initDisplay() {
@@ -86,12 +89,10 @@ bool initWifi() {
     return wifiStatus == WL_CONNECTED;
 }
 
-bool reconnectWifiIfDisconnected() {
-    wl_status_t wifiStatus;
+void resetIfDisconnected() {
+    wl_status_t wifiStatus = WiFi.status();
 
-    wifiStatus = WiFi.status();
-
-    if (wifiStatus == WL_CONNECTED) return true;
+    if (wifiStatus == WL_CONNECTED) return;
 
     Serial.println("Reconnecting to network...");
     WiFi.reconnect();
@@ -106,26 +107,15 @@ bool reconnectWifiIfDisconnected() {
 
     if (wifiStatus == WL_CONNECTED) {
         Serial.println("\nSuccessfully re-connected to network");
+        initTime();
     } else {
         Serial.println("Failed to reconnect.");
         WiFi.disconnect(); // fully disconnect
     }
-
-    return wifiStatus == WL_CONNECTED;
 }
 
 void retrieveTime(struct tm *timeinfo) {
-    timeSyncIntervalCounter++;
-
-    if (timeSyncIntervalCounter >= TIME_SYNC_INTERVAL) {
-        bool result = reconnectWifiIfDisconnected();
-
-        if (result) {
-          // we successfully connected; reset the interval
-          timeSyncIntervalCounter = 0;
-          initTime();
-        }
-    }
+    resetIfDisconnected();
 
     bool timeRetrievalSuccess = getLocalTime(timeinfo);
     if (!timeRetrievalSuccess) {
@@ -161,6 +151,7 @@ void displayTime(struct tm *timeinfo) {
     display.print(amPmString);
 
     display.display(true);
+    display.hibernate();
 }
 
 void setup() {
