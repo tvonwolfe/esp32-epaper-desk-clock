@@ -175,5 +175,5 @@ void loop() {
 
     int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
     esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
-    esp_deep_sleep_start();
+    esp_light_sleep_start();
 }
