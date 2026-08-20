@@ -16,8 +16,9 @@ extern "C" {
 
 #define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
-#define MIN_PER_HOUR SECONDS_PER_MIN
-#define TIME_SYNC_INTERVAL (SECONDS_PER_MIN * 15 * 1000) // 15 minutes
+
+// 15 minute sync intervals
+#define NTP_SYNC_INTERVAL (SECONDS_PER_MIN * 15)
 
 #define MAX_CONNECTION_ATTEMPTS (20)
 
@@ -29,6 +30,8 @@ const char *timeZone = "MST7MDT,M3.2.0,M11.1.0";
 
 GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
 
+int timeSyncIntervalCounter = 0;
+
 void setTimezone(){
     setenv("TZ",timeZone, 1);
     tzset();
@@ -37,8 +40,10 @@ void setTimezone(){
 void initTime() {
     configTime(0, 0, ntpServer);
     setTimezone();
-    sntp_set_sync_interval(TIME_SYNC_INTERVAL);
     sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+    sntp_set_time_sync_notification_cb([](struct timeval *tv){
+        WiFi.disconnect();
+    });
 }
 
 void initDisplay() {
@@ -89,15 +94,12 @@ bool initWifi() {
     return wifiStatus == WL_CONNECTED;
 }
 
-void resetIfDisconnected() {
-    wl_status_t wifiStatus = WiFi.status();
-
-    if (wifiStatus == WL_CONNECTED) return;
-
-    Serial.println("Reconnecting to network...");
+void performNTPSync() {
+    Serial.println("Connecting to network...");
     WiFi.reconnect();
 
     int attempt = 0;
+    wl_status_t wifiStatus = WiFi.status();
     while (wifiStatus != WL_CONNECTED && attempt < MAX_CONNECTION_ATTEMPTS) {
         wifiStatus = WiFi.status();
         attempt++;
@@ -110,15 +112,16 @@ void resetIfDisconnected() {
         initTime();
     } else {
         Serial.println("Failed to reconnect.");
-        WiFi.disconnect(); // fully disconnect
     }
 }
 
 void retrieveTime(struct tm *timeinfo) {
-    resetIfDisconnected();
+    if (++timeSyncIntervalCounter >= NTP_SYNC_INTERVAL) {
+        performNTPSync();
+        timeSyncIntervalCounter = 0;
+    }
 
-    bool timeRetrievalSuccess = getLocalTime(timeinfo);
-    if (!timeRetrievalSuccess) {
+    if (!getLocalTime(timeinfo)) {
         Serial.println("Failed to obtain time");
     }
 }
@@ -172,5 +175,5 @@ void loop() {
 
     int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
     esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
-    esp_light_sleep_start();
+    esp_deep_sleep_start();
 }
