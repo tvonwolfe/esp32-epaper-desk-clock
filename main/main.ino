@@ -7,118 +7,124 @@
 #include <time.h>
 
 extern "C" {
-  #include "esp_sntp.h"
+#include "esp_sntp.h"
 }
 
-#define DC_PIN   (4)
-#define RS_PIN   (5)
+#define DC_PIN (4)
+#define RS_PIN (5)
 #define BUSY_PIN (6)
 
 #define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
 
-// 15 minute sync intervals
-#define NTP_SYNC_INTERVAL (SECONDS_PER_MIN * 15)
+// 60-minute sync intervals
+#define NTP_SYNC_INTERVAL (60)
 
 #define MAX_CONNECTION_ATTEMPTS (20)
 
-const char *ssid = "<wifi ssid>";
-const char *password = "<wifi password>";
+typedef GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display_t;
 
-const char *ntpServer = "time.nist.gov";
-const char *timeZone = "MST7MDT,M3.2.0,M11.1.0";
+const char *ip = WIFI_IPADDR;
+const char *ssid = WIFI_SSID;
+const char *password = WIFI_PASS;
 
-GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
+const char *ntpServer = NTPSERV;
+const char *timeZone = TZ;
 
-int timeSyncIntervalCounter = 0;
+struct device_state_t {
+    int wifiConnectionAttemptFailures;
+    bool performedInitialBoot;
+    int timeSyncIntervalCounter;
+};
 
-void setTimezone(){
-    setenv("TZ",timeZone, 1);
+RTC_DATA_ATTR display_t display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
+RTC_DATA_ATTR device_state_t device_state = {
+    .wifiConnectionAttemptFailures = 0,
+    .performedInitialBoot = false,
+    .timeSyncIntervalCounter = 0
+};
+
+void setTimezone() {
+    setenv("TZ", timeZone, 1);
     tzset();
 }
 
 void initTime() {
     configTime(0, 0, ntpServer);
-    setTimezone();
     sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
-    sntp_set_time_sync_notification_cb([](struct timeval *tv){
+    sntp_set_time_sync_notification_cb([](struct timeval *tv) {
         WiFi.disconnect();
     });
 }
 
-void initDisplay() {
-    Serial.println("Initializing display...");
-    display.init(115200, true, 50, false);
-    Serial.println("Display initialized. Configuring...");
+void initDisplay(device_state_t *device_state, display_t *display) {
+    display->init(115200, device_state->timeSyncIntervalCounter == 0, 50, false);
 
-    display.setRotation(3);
-    display.clearScreen();
-    display.fillScreen(GxEPD_WHITE);
-    display.setTextColor(GxEPD_BLACK);
+    display->setRotation(3);
+    display->setTextColor(GxEPD_BLACK);
+
+    if (!device_state->performedInitialBoot) {
+        display->clearScreen();
+        display->fillScreen(GxEPD_WHITE);
+    }
 }
 
-bool initWifi() {
-    display.setFont(&FreeSans18pt7b);
-    display.setCursor(10, 30);
-    display.setTextSize(1);
-    display.print("Connecting...");
-    display.display(true);
-
+bool connectWifi(device_state_t *device_state) {
     Serial.println("Connecting to network...");
+    WiFi.config(ip);
     WiFi.begin(ssid, password);
 
     wl_status_t wifiStatus;
-
     int attempt = 0;
-    while (wifiStatus != WL_CONNECTED && attempt < MAX_CONNECTION_ATTEMPTS) {
+    bool connected;
+    while (!(connected = (wifiStatus == WL_CONNECTED)) && attempt < MAX_CONNECTION_ATTEMPTS) {
         wifiStatus = WiFi.status();
         attempt++;
         Serial.print(".");
         delay(1000);
     }
 
-    display.fillScreen(GxEPD_WHITE);
-    display.setCursor(10,30);
-    display.setTextSize(1);
-
-    if (wifiStatus == WL_CONNECTED) {
-        display.print("Connected.");
+    if (connected) {
         Serial.println("\nSuccessfully connected to network");
+    } else if (device_state->performedInitialBoot) {
+        device_state->wifiConnectionAttemptFailures++;
+        Serial.println("\nFailed to re-connect to network");
+    }
+
+    return connected;
+}
+
+bool performInitialBoot(device_state_t *device_state, display_t *display) {
+    display->setFont(&FreeSans18pt7b);
+    display->setCursor(10, 30);
+    display->setTextSize(1);
+    display->print("Connecting...");
+    display->display(true);
+
+    bool connected = connectWifi(device_state);
+
+    display->fillScreen(GxEPD_WHITE);
+    display->setCursor(10, 30);
+    display->setTextSize(1);
+
+    if (connected) {
+        display->print("Connected.");
+        initTime();
     } else {
-        display.print("Failed to connect.");
+        display->print("Failed to connect.");
         Serial.println("Failed to connect to network");
     }
 
-    display.display(true);
+    device_state->performedInitialBoot = true;
+    display->display(true);
 
-    return wifiStatus == WL_CONNECTED;
+    return connected;
 }
 
-void performNTPSync() {
-    Serial.println("Connecting to network...");
-    WiFi.reconnect();
-
-    int attempt = 0;
-    wl_status_t wifiStatus = WiFi.status();
-    while (wifiStatus != WL_CONNECTED && attempt < MAX_CONNECTION_ATTEMPTS) {
-        wifiStatus = WiFi.status();
-        attempt++;
-        Serial.print(".");
-        delay(1000);
-    }
-
-    if (wifiStatus == WL_CONNECTED) {
-        Serial.println("\nSuccessfully re-connected to network");
+void retrieveTime(struct tm *timeinfo, device_state_t *device_state) {
+    if (++device_state->timeSyncIntervalCounter >= NTP_SYNC_INTERVAL && connectWifi(device_state)) {
         initTime();
-    } else {
-        Serial.println("Failed to reconnect.");
-    }
-}
-
-void retrieveTime(struct tm *timeinfo) {
-    if (++timeSyncIntervalCounter >= NTP_SYNC_INTERVAL) {
-        performNTPSync();
-        timeSyncIntervalCounter = 0;
+        device_state->timeSyncIntervalCounter = 0;
     }
 
     if (!getLocalTime(timeinfo)) {
@@ -126,7 +132,7 @@ void retrieveTime(struct tm *timeinfo) {
     }
 }
 
-void displayTime(struct tm *timeinfo) {
+void displayTime(struct tm *timeinfo, display_t *display) {
     char amPmString[4];
     char timeString[8];
     char dateString[16];
@@ -137,43 +143,44 @@ void displayTime(struct tm *timeinfo) {
 
     Serial.println(timeString);
 
-    display.fillScreen(GxEPD_WHITE);
+    display->fillScreen(GxEPD_WHITE);
 
-    display.setCursor(20, 85);
-    display.setTextSize(3);
-    display.setFont(&FreeSans18pt7b);
-    display.print(timeString);
+    display->setCursor(20, 83);
+    display->setTextSize(3);
+    display->setFont(&FreeSans18pt7b);
+    display->print(timeString);
 
-    display.setTextSize(1);
-    display.setFont(&FreeSans12pt7b);
+    display->setTextSize(1);
+    display->setFont(&FreeSans12pt7b);
 
-    display.setCursor(25, 115);
-    display.print(dateString);
+    display->setCursor(25, 115);
+    display->print(dateString);
 
-    display.setCursor(235, 115);
-    display.print(amPmString);
+    display->setCursor(235, 115);
+    display->print(amPmString);
 
-    display.display(true);
-    display.hibernate();
+    display->display(true);
+    display->hibernate();
 }
 
 void setup() {
-    Serial.begin(115200);
-
-    initDisplay();
-    bool wifiSuccess = initWifi();
-    if (!wifiSuccess) return;
-
-    initTime();
-}
-
-void loop() {
     struct tm timeinfo;
+    initDisplay(&device_state, &display);
 
-    retrieveTime(&timeinfo);
-    displayTime(&timeinfo);
+    if (!device_state.performedInitialBoot) {
+        bool wifiSuccess = performInitialBoot(&device_state, &display);
+
+        if (!wifiSuccess) return;
+    }
+
+    setTimezone();
+    retrieveTime(&timeinfo, &device_state);
+
+    displayTime(&timeinfo, &display);
 
     int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
     esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
-    esp_light_sleep_start();
+    esp_deep_sleep_start();
 }
+
+void loop() {}
