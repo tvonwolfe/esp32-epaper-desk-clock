@@ -51,6 +51,7 @@ void setTimezone() {
 
 void initTime() {
     configTime(0, 0, ntpServer);
+    setTimezone();
     sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
     sntp_set_time_sync_notification_cb([](struct timeval *tv) {
         WiFi.disconnect();
