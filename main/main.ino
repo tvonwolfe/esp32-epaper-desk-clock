@@ -17,9 +17,6 @@ extern "C" {
 #define US_PER_SEC (1000000)
 #define SECONDS_PER_MIN (60)
 
-// 60-minute sync intervals
-#define NTP_SYNC_INTERVAL (60)
-
 #define MAX_CONNECTION_ATTEMPTS (20)
 
 typedef GxEPD2_BW<GxEPD2_290_BS, GxEPD2_290_BS::HEIGHT> display_t;
@@ -34,14 +31,13 @@ const char *timeZone = TZ;
 struct device_state_t {
     int wifiConnectionAttemptFailures;
     bool performedInitialBoot;
-    int timeSyncIntervalCounter;
+    struct tm timeinfo;
 };
 
 RTC_DATA_ATTR display_t display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
 RTC_DATA_ATTR device_state_t device_state = {
     .wifiConnectionAttemptFailures = 0,
     .performedInitialBoot = false,
-    .timeSyncIntervalCounter = 0
 };
 
 void setTimezone() {
@@ -58,8 +54,13 @@ void initTime() {
     });
 }
 
+bool isTopOfHour(device_state_t *device_state) {
+    return device_state->timeinfo.tm_min == 0;
+}
+
 void initDisplay(device_state_t *device_state, display_t *display) {
-    display->init(115200, device_state->timeSyncIntervalCounter == 0, 50, false);
+    bool shouldFullyInit = !device_state->performedInitialBoot || isTopOfHour(device_state);
+    display->init(115200, shouldFullyInit, 50, false);
 
     display->setRotation(3);
     display->setTextColor(GxEPD_BLACK);
@@ -122,25 +123,15 @@ bool performInitialBoot(device_state_t *device_state, display_t *display) {
     return connected;
 }
 
-void retrieveTime(struct tm *timeinfo, device_state_t *device_state) {
-    if (++device_state->timeSyncIntervalCounter >= NTP_SYNC_INTERVAL && connectWifi(device_state)) {
-        initTime();
-        device_state->timeSyncIntervalCounter = 0;
-    }
-
-    if (!getLocalTime(timeinfo)) {
-        Serial.println("Failed to obtain time");
-    }
-}
-
-void displayTime(struct tm *timeinfo, display_t *display) {
+void displayTime(device_state_t *device_state, display_t *display) {
+    struct tm timeinfo = device_state->timeinfo;
     char amPmString[4];
     char timeString[8];
     char dateString[16];
 
-    strftime(timeString, sizeof(timeString), "%I:%M", timeinfo);
-    strftime(dateString, sizeof(dateString), "%D", timeinfo);
-    strftime(amPmString, sizeof(amPmString), "%p", timeinfo);
+    strftime(timeString, sizeof(timeString), "%I:%M", &timeinfo);
+    strftime(dateString, sizeof(dateString), "%D", &timeinfo);
+    strftime(amPmString, sizeof(amPmString), "%p", &timeinfo);
 
     Serial.println(timeString);
 
@@ -164,8 +155,13 @@ void displayTime(struct tm *timeinfo, display_t *display) {
     display->hibernate();
 }
 
+void performTimeSync(device_state_t *device_state) {
+    connectWifi(device_state);
+    initTime();
+    getLocalTime(&device_state->timeinfo);
+}
+
 void setup() {
-    struct tm timeinfo;
     initDisplay(&device_state, &display);
 
     if (!device_state.performedInitialBoot) {
@@ -175,11 +171,15 @@ void setup() {
     }
 
     setTimezone();
-    retrieveTime(&timeinfo, &device_state);
+    if (!getLocalTime(&device_state.timeinfo)) {
+        Serial.println("Failed to obtain time");
+    }
 
-    displayTime(&timeinfo, &display);
+    displayTime(&device_state, &display);
 
-    int seconds_to_sleep = SECONDS_PER_MIN - timeinfo.tm_sec;
+    if (isTopOfHour(&device_state)) performTimeSync(&device_state);
+
+    int seconds_to_sleep = SECONDS_PER_MIN - device_state.timeinfo.tm_sec;
     esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
     esp_deep_sleep_start();
 }
