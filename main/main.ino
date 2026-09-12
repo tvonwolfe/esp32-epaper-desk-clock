@@ -32,6 +32,14 @@ struct device_state_t {
     int wifiConnectionAttemptFailures;
     bool performedInitialBoot;
     struct tm timeinfo;
+
+    struct tm *getCurrentTime() {
+        if (!getLocalTime(&timeinfo)) {
+            Serial.println("Failed to obtain time");
+        }
+
+        return &timeinfo;
+    }
 };
 
 RTC_DATA_ATTR display_t display(GxEPD2_290_BS(SS, DC_PIN, RS_PIN, BUSY_PIN));
@@ -55,7 +63,7 @@ void initTime() {
 }
 
 bool isTopOfHour(device_state_t *device_state) {
-    return device_state->timeinfo.tm_min == 0;
+    return device_state->getCurrentTime()->tm_min == 0;
 }
 
 void initDisplay(device_state_t *device_state, display_t *display) {
@@ -124,14 +132,14 @@ bool performInitialBoot(device_state_t *device_state, display_t *display) {
 }
 
 void displayTime(device_state_t *device_state, display_t *display) {
-    struct tm timeinfo = device_state->timeinfo;
+    struct tm *timeinfo = device_state->getCurrentTime();
     char amPmString[4];
     char timeString[8];
     char dateString[16];
 
-    strftime(timeString, sizeof(timeString), "%I:%M", &timeinfo);
-    strftime(dateString, sizeof(dateString), "%D", &timeinfo);
-    strftime(amPmString, sizeof(amPmString), "%p", &timeinfo);
+    strftime(timeString, sizeof(timeString), "%I:%M", timeinfo);
+    strftime(dateString, sizeof(dateString), "%D", timeinfo);
+    strftime(amPmString, sizeof(amPmString), "%p", timeinfo);
 
     Serial.println(timeString);
 
@@ -158,7 +166,6 @@ void displayTime(device_state_t *device_state, display_t *display) {
 void performTimeSync(device_state_t *device_state) {
     connectWifi(device_state);
     initTime();
-    getLocalTime(&device_state->timeinfo);
 }
 
 void setup() {
@@ -171,15 +178,11 @@ void setup() {
     }
 
     setTimezone();
-    if (!getLocalTime(&device_state.timeinfo)) {
-        Serial.println("Failed to obtain time");
-    }
-
     displayTime(&device_state, &display);
 
     if (isTopOfHour(&device_state)) performTimeSync(&device_state);
 
-    int seconds_to_sleep = SECONDS_PER_MIN - device_state.timeinfo.tm_sec;
+    int seconds_to_sleep = SECONDS_PER_MIN - device_state.getCurrentTime()->tm_sec;
     esp_sleep_enable_timer_wakeup(US_PER_SEC * seconds_to_sleep);
     esp_deep_sleep_start();
 }
